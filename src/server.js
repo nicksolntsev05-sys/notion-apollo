@@ -1,7 +1,13 @@
 require('dotenv').config();
 const express = require('express');
 const { Client } = require('@notionhq/client');
-const { getSnovToken, startLinkedInEnrichment, pollEnrichmentResult } = require('./snov');
+const {
+  getSnovToken,
+  startLinkedInEnrichment,
+  pollEnrichmentResult,
+  startEmailFinder,
+  pollEmailFinderResult,
+} = require('./snov');
 
 const app = express();
 app.use(express.json());
@@ -14,9 +20,9 @@ const {
   SNOV_CLIENT_ID,
   SNOV_CLIENT_SECRET,
   WEBHOOK_SECRET,        // произвольная строка, которую мы сами придумаем — для защиты эндпоинта
-  NOTION_LINKEDIN_PROPERTY = 'Contact Linkedin page',
-  NOTION_EMAIL_PROPERTY = 'Contacts Email',
-  NOTION_STATUS_PROPERTY = 'Enrich Status', // необязательное текстовое поле-статус
+  NOTION_LINKEDIN_PROPERTY = 'LinkedIn',
+  NOTION_EMAIL_PROPERTY = 'Emails',
+  NOTION_STATUS_PROPERTY = '', // необязательное текстовое поле-статус; пусто = не отправлять
 } = process.env;
 
 if (!NOTION_TOKEN || !APOLLO_API_KEY || !WEBHOOK_SECRET) {
@@ -48,6 +54,16 @@ function extractFromNotionPayload(body) {
   }
 
   return { pageId, linkedinUrl };
+}
+
+function extractDomain(url) {
+  if (!url) return null;
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
 }
 
 async function findEmailViaApollo(linkedinUrl) {
@@ -84,26 +100,49 @@ async function findEmailViaApollo(linkedinUrl) {
 
 async function findEmailViaSnov(linkedinUrl) {
   const token = await getSnovToken();
+
+  // Шаг 1: получаем профиль (имя, домен компании из первой позиции)
   const startResp = await startLinkedInEnrichment(linkedinUrl, token);
+  const taskHash = startResp.data?.task_hash;
+  if (!taskHash) throw new Error('No task_hash in Snov.io profile response');
 
-  console.log('[Snov] start response:', JSON.stringify(startResp));
+  const profileResult = await pollEnrichmentResult(taskHash, token);
+  console.log('[Snov] profile result:', JSON.stringify(profileResult));
 
-  const taskHash = startResp.data?.task_hash || startResp.task_hash;
-  if (!taskHash) {
-    throw new Error('No task_hash in Snov.io start response');
+  const entry = profileResult.data?.[0];
+  const person = entry?.result;
+  if (!person || Array.isArray(person)) {
+    return { email: null, status: 'profile_not_found' };
   }
 
-  const result = await pollEnrichmentResult(taskHash, token);
-  console.log('[Snov] raw result:', JSON.stringify(result));
+  const firstName = person.first_name;
+  const lastName = person.last_name;
+  const companyUrl = person.positions?.[0]?.url;
+  const domain = extractDomain(companyUrl);
 
-  const entry = result.data?.[0];
-  const person = entry?.result;
+  if (!firstName || !lastName || !domain) {
+    console.log('[Snov] Not enough data for email finder:', { firstName, lastName, domain });
+    return { email: null, status: 'missing_name_or_domain' };
+  }
 
-  if (!person || Array.isArray(person) || !person.emails?.length) {
+  // Шаг 2: ищем email по имени+домену
+  const finderStart = await startEmailFinder(firstName, lastName, domain, token);
+  const finderTaskHash = finderStart.data?.task_hash;
+  if (!finderTaskHash) throw new Error('No task_hash in Snov.io email finder response');
+
+  const finderResult = await pollEmailFinderResult(finderTaskHash, token);
+  console.log('[Snov] email finder result:', JSON.stringify(finderResult));
+
+  const foundEmail =
+    finderResult.data?.[0]?.emails?.[0]?.email ||
+    finderResult.data?.[0]?.email ||
+    null;
+
+  if (!foundEmail) {
     return { email: null, status: 'not_found' };
   }
 
-  return { email: person.emails[0], status: 'found' };
+  return { email: foundEmail, status: 'found' };
 }
 
 async function updateNotionPage(pageId, email, status) {
@@ -121,10 +160,31 @@ async function updateNotionPage(pageId, email, status) {
     };
   }
 
-  await notion.pages.update({
-    page_id: pageId,
-    properties,
-  });
+  if (Object.keys(properties).length === 0) return;
+
+  try {
+    await notion.pages.update({
+      page_id: pageId,
+      properties,
+    });
+  } catch (err) {
+    if (err.code === 'validation_error') {
+      console.error(`Notion validation error (проверь названия/типы колонок): ${err.message}`);
+      // фолбэк — пробуем записать только email, без статуса
+      if (email && NOTION_STATUS_PROPERTY) {
+        try {
+          await notion.pages.update({
+            page_id: pageId,
+            properties: { [NOTION_EMAIL_PROPERTY]: { email } },
+          });
+        } catch (innerErr) {
+          console.error('Notion fallback update also failed:', innerErr.message);
+        }
+      }
+    } else {
+      throw err;
+    }
+  }
 }
 
 // ---------- Роуты ----------
