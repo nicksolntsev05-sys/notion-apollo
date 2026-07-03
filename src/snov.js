@@ -42,12 +42,14 @@ async function startLinkedInEnrichment(linkedinUrl, token) {
     const text = await res.text();
     throw new Error(`Snov.io enrichment start failed: ${res.status} ${text}`);
   }
-  return res.json(); // ожидаем { data: { task_hash: "..." } }
+  return res.json();
 }
 
 async function getEnrichmentResult(taskHash, token) {
+  const params = new URLSearchParams({ task_hash: taskHash });
+
   const res = await fetch(
-    `https://api.snov.io/v2/li-profiles-by-urls/result/${taskHash}`,
+    `https://api.snov.io/v2/li-profiles-by-urls/result?${params.toString()}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res.ok) {
@@ -60,7 +62,7 @@ async function getEnrichmentResult(taskHash, token) {
 async function pollEnrichmentResult(taskHash, token, maxTries = 10, delayMs = 2000) {
   for (let i = 0; i < maxTries; i++) {
     const result = await getEnrichmentResult(taskHash, token);
-    if (result.status === 'completed' || result.data) {
+    if (result.status === 'completed') {
       return result;
     }
     await new Promise((r) => setTimeout(r, delayMs));
