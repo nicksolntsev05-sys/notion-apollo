@@ -190,3 +190,29 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+// Тестовый вебхук для Notion — та же логика извлечения payload, но обогащение через Snov.io
+app.post('/webhook/enrich-snov', async (req, res) => {
+  if (req.query.secret !== WEBHOOK_SECRET) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  res.status(200).json({ ok: true, received: true });
+
+  try {
+    const { pageId, linkedinUrl } = extractFromNotionPayload(req.body);
+
+    if (!pageId || !linkedinUrl) {
+      console.error('Missing pageId or linkedinUrl in payload', JSON.stringify(req.body));
+      return;
+    }
+
+    console.log(`[Snov] Enriching page ${pageId} via LinkedIn: ${linkedinUrl}`);
+
+    const { email, status } = await findEmailViaSnov(linkedinUrl);
+    await updateNotionPage(pageId, email, status);
+
+    console.log(`[Snov] Done. Page ${pageId} -> status: ${status}, email: ${email || 'none'}`);
+  } catch (err) {
+    console.error('[Snov] Enrichment failed:', err.message);
+  }
+});
