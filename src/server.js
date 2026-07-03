@@ -125,8 +125,10 @@ async function findEmailViaSnov(linkedinUrl) {
     return { email: null, status: 'missing_name_or_domain' };
   }
 
-  // Шаг 2: ищем email по имени+домену
+   // Шаг 2: ищем email по имени+домену
   const finderStart = await startEmailFinder(firstName, lastName, domain, token);
+  console.log('[Snov] email finder start response:', JSON.stringify(finderStart));
+
   const finderTaskHash = finderStart.data?.task_hash;
   if (!finderTaskHash) throw new Error('No task_hash in Snov.io email finder response');
 
