@@ -156,7 +156,7 @@ async function updateNotionPage(pageId, email, status) {
 
   if (email) {
     properties[NOTION_EMAIL_PROPERTY] = {
-      email: email,
+      rich_text: [{ text: { content: email } }],
     };
   }
 
@@ -180,7 +180,9 @@ async function updateNotionPage(pageId, email, status) {
         try {
           await notion.pages.update({
             page_id: pageId,
-            properties: { [NOTION_EMAIL_PROPERTY]: { email } },
+            properties: {
+              [NOTION_EMAIL_PROPERTY]: { rich_text: [{ text: { content: email } }] },
+            },
           });
         } catch (innerErr) {
           console.error('Notion fallback update also failed:', innerErr.message);
