@@ -105,10 +105,16 @@ async function getEmailFinderResult(taskHash, token) {
   return res.json();
 }
 
-async function pollEmailFinderResult(taskHash, token, maxTries = 10, delayMs = 2000) {
+async function pollEmailFinderResult(taskHash, token, maxTries = 10, delayMs = 3000) {
   for (let i = 0; i < maxTries; i++) {
     const result = await getEmailFinderResult(taskHash, token);
+    console.log(`[Snov] email finder poll attempt ${i + 1}:`, JSON.stringify(result));
+
     if (result.status === 'completed') return result;
+    if (result.status === 'failed' || result.errors) {
+      throw new Error(`Snov.io email finder task failed: ${JSON.stringify(result)}`);
+    }
+
     await new Promise((r) => setTimeout(r, delayMs));
   }
   throw new Error('Snov.io email finder task did not complete in time');
