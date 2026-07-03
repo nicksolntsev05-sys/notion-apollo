@@ -27,6 +27,8 @@ async function getSnovToken() {
   return cachedToken;
 }
 
+// ---- LinkedIn profile enrichment (имя, компания, позиция — БЕЗ email) ----
+
 async function startLinkedInEnrichment(linkedinUrl, token) {
   const params = new URLSearchParams();
   params.append('urls[]', linkedinUrl);
@@ -70,8 +72,52 @@ async function pollEnrichmentResult(taskHash, token, maxTries = 10, delayMs = 20
   throw new Error('Snov.io task did not complete in time');
 }
 
+// ---- Email Finder (имя + домен -> email) ----
+
+async function startEmailFinder(firstName, lastName, domain, token) {
+  const res = await fetch('https://api.snov.io/v2/emails-by-domain-by-name/start', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      rows: [{ first_name: firstName, last_name: lastName, domain }],
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Snov.io email finder start failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+async function getEmailFinderResult(taskHash, token) {
+  const params = new URLSearchParams({ task_hash: taskHash });
+  const res = await fetch(
+    `https://api.snov.io/v2/emails-by-domain-by-name/result?${params.toString()}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Snov.io email finder result failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+async function pollEmailFinderResult(taskHash, token, maxTries = 10, delayMs = 2000) {
+  for (let i = 0; i < maxTries; i++) {
+    const result = await getEmailFinderResult(taskHash, token);
+    if (result.status === 'completed') return result;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  throw new Error('Snov.io email finder task did not complete in time');
+}
+
 module.exports = {
   getSnovToken,
   startLinkedInEnrichment,
   pollEnrichmentResult,
+  startEmailFinder,
+  pollEmailFinderResult,
 };
