@@ -125,7 +125,7 @@ async function findEmailViaSnov(linkedinUrl) {
     return { email: null, status: 'missing_name_or_domain' };
   }
 
-   // Шаг 2: ищем email по имени+домену
+  // Шаг 2: ищем email по имени+домену
   const finderStart = await startEmailFinder(firstName, lastName, domain, token);
   console.log('[Snov] email finder start response:', JSON.stringify(finderStart));
 
@@ -135,10 +135,14 @@ async function findEmailViaSnov(linkedinUrl) {
   const finderResult = await pollEmailFinderResult(finderTaskHash, token);
   console.log('[Snov] email finder result:', JSON.stringify(finderResult));
 
-  const foundEmail =
-    finderResult.data?.[0]?.emails?.[0]?.email ||
-    finderResult.data?.[0]?.email ||
-    null;
+  const matches = finderResult.data?.[0]?.result;
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return { email: null, status: 'not_found' };
+  }
+
+  // Берём первый email с валидным SMTP-статусом, если такой есть
+  const validMatch = matches.find((m) => m.smtp_status === 'valid') || matches[0];
+  const foundEmail = validMatch?.email;
 
   if (!foundEmail) {
     return { email: null, status: 'not_found' };
@@ -172,7 +176,6 @@ async function updateNotionPage(pageId, email, status) {
   } catch (err) {
     if (err.code === 'validation_error') {
       console.error(`Notion validation error (проверь названия/типы колонок): ${err.message}`);
-      // фолбэк — пробуем записать только email, без статуса
       if (email && NOTION_STATUS_PROPERTY) {
         try {
           await notion.pages.update({
