@@ -29,8 +29,6 @@ const notion = new Client({ auth: NOTION_TOKEN });
 // ---------- Хелперы ----------
 
 // Достаём LinkedIn URL и page_id из тела вебхука Notion.
-// Notion присылает данные о странице/свойствах в разных формах в зависимости от того,
-// как настроена кнопка (data.id + data.properties, либо просто id + properties).
 function extractFromNotionPayload(body) {
   const page = body.data || body;
   const pageId = page.id;
@@ -62,7 +60,7 @@ async function findEmailViaApollo(linkedinUrl) {
     },
     body: JSON.stringify({
       linkedin_url: linkedinUrl,
-      reveal_personal_emails: false, // включи true, если нужен личный email (тратит доп. кредиты)
+      reveal_personal_emails: false,
     }),
   });
 
@@ -87,10 +85,16 @@ async function findEmailViaApollo(linkedinUrl) {
 async function findEmailViaSnov(linkedinUrl) {
   const token = await getSnovToken();
   const startResp = await startLinkedInEnrichment(linkedinUrl, token);
-  const result = await pollEnrichmentResult(startResp.task_hash, token);
 
-  // На первом реальном тесте залогируй полный ответ, чтобы свериться со структурой:
-  console.log('Snov.io raw result:', JSON.stringify(result));
+  console.log('[Snov] start response:', JSON.stringify(startResp));
+
+  const taskHash = startResp.data?.task_hash || startResp.task_hash;
+  if (!taskHash) {
+    throw new Error('No task_hash in Snov.io start response');
+  }
+
+  const result = await pollEnrichmentResult(taskHash, token);
+  console.log('[Snov] raw result:', JSON.stringify(result));
 
   const person = result.data?.[0];
   if (!person || !person.emails?.length) {
@@ -105,7 +109,7 @@ async function updateNotionPage(pageId, email, status) {
 
   if (email) {
     properties[NOTION_EMAIL_PROPERTY] = {
-      email: email, // если колонка Contacts Email — тип Email
+      email: email,
     };
   }
 
@@ -123,13 +127,12 @@ async function updateNotionPage(pageId, email, status) {
 
 // ---------- Роуты ----------
 
-// Основной вебхук — на него будет бить кнопка Notion
+// Основной вебхук — на него будет бить кнопка Notion (Apollo)
 app.post('/webhook/enrich', async (req, res) => {
   if (req.query.secret !== WEBHOOK_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });
   }
 
-  // Отвечаем Notion сразу, чтобы не ждал — дальше обрабатываем асинхронно
   res.status(200).json({ ok: true, received: true });
 
   try {
@@ -151,46 +154,7 @@ app.post('/webhook/enrich', async (req, res) => {
   }
 });
 
-// Тестовый эндпоинт — чтобы проверить руками через curl, без Notion (Apollo)
-app.post('/test/enrich', async (req, res) => {
-  if (req.query.secret !== WEBHOOK_SECRET) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-  try {
-    const { pageId, linkedinUrl } = req.body;
-    const { email, status } = await findEmailViaApollo(linkedinUrl);
-    if (pageId) await updateNotionPage(pageId, email, status);
-    res.json({ email, status });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Тестовый эндпоинт для Snov.io — отдельно от Apollo, ничего не ломает
-app.post('/test/enrich-snov', async (req, res) => {
-  if (req.query.secret !== WEBHOOK_SECRET) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-  try {
-    const { pageId, linkedinUrl } = req.body;
-    if (!linkedinUrl) {
-      return res.status(400).json({ error: 'linkedinUrl is required' });
-    }
-    const { email, status } = await findEmailViaSnov(linkedinUrl);
-    if (pageId) await updateNotionPage(pageId, email, status);
-    res.json({ email, status });
-  } catch (err) {
-    console.error('Snov test error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/health', (req, res) => res.json({ ok: true }));
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-// Тестовый вебхук для Notion — та же логика извлечения payload, но обогащение через Snov.io
+// Тестовый вебхук для Notion — Snov.io
 app.post('/webhook/enrich-snov', async (req, res) => {
   if (req.query.secret !== WEBHOOK_SECRET) {
     return res.status(401).json({ error: 'unauthorized' });
@@ -215,4 +179,44 @@ app.post('/webhook/enrich-snov', async (req, res) => {
   } catch (err) {
     console.error('[Snov] Enrichment failed:', err.message);
   }
+});
+
+// Тестовый эндпоинт — Apollo, без Notion
+app.post('/test/enrich', async (req, res) => {
+  if (req.query.secret !== WEBHOOK_SECRET) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const { pageId, linkedinUrl } = req.body;
+    const { email, status } = await findEmailViaApollo(linkedinUrl);
+    if (pageId) await updateNotionPage(pageId, email, status);
+    res.json({ email, status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Тестовый эндпоинт для Snov.io — без Notion
+app.post('/test/enrich-snov', async (req, res) => {
+  if (req.query.secret !== WEBHOOK_SECRET) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const { pageId, linkedinUrl } = req.body;
+    if (!linkedinUrl) {
+      return res.status(400).json({ error: 'linkedinUrl is required' });
+    }
+    const { email, status } = await findEmailViaSnov(linkedinUrl);
+    if (pageId) await updateNotionPage(pageId, email, status);
+    res.json({ email, status });
+  } catch (err) {
+    console.error('Snov test error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/health', (req, res) => res.json({ ok: true }));
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
