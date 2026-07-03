@@ -96,8 +96,10 @@ async function findEmailViaSnov(linkedinUrl) {
   const result = await pollEnrichmentResult(taskHash, token);
   console.log('[Snov] raw result:', JSON.stringify(result));
 
-  const person = result.data?.[0];
-  if (!person || !person.emails?.length) {
+  const entry = result.data?.[0];
+  const person = entry?.result;
+
+  if (!person || Array.isArray(person) || !person.emails?.length) {
     return { email: null, status: 'not_found' };
   }
 
