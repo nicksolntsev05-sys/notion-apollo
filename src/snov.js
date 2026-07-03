@@ -28,24 +28,26 @@ async function getSnovToken() {
 }
 
 async function startLinkedInEnrichment(linkedinUrl, token) {
-  const res = await fetch('https://api.snov.io/v2/linkedin-url-enrichment/start', {
+  const params = new URLSearchParams();
+  params.append('urls[]', linkedinUrl);
+
+  const res = await fetch(`https://api.snov.io/v2/li-profiles-by-urls/start?${params.toString()}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ urls: [linkedinUrl] }),
   });
+
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Snov.io enrichment start failed: ${res.status} ${text}`);
   }
-  return res.json();
+  return res.json(); // ожидаем { data: { task_hash: "..." } }
 }
 
 async function getEnrichmentResult(taskHash, token) {
   const res = await fetch(
-    `https://api.snov.io/v2/linkedin-url-enrichment/result?task_hash=${taskHash}`,
+    `https://api.snov.io/v2/li-profiles-by-urls/result/${taskHash}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res.ok) {
